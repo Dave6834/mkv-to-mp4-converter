@@ -1,14 +1,15 @@
 // components/VideoConverter.js
 import { useState, useEffect, useRef } from 'react';
+// Import specific versions
 import { createFFmpeg, fetchFile } from '@ffmpeg/ffmpeg';
 
-const ffmpeg = createFFmpeg({
-  log: true,
-  corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js',
-});
+// Don't initialize ffmpeg right away
+let ffmpeg = null;
 
 const VideoConverter = () => {
   const [isFFmpegLoaded, setIsFFmpegLoaded] = useState(false);
+  const [isFFmpegLoading, setIsFFmpegLoading] = useState(false);
+  const [loadingError, setLoadingError] = useState(null);
   const [inputFile, setInputFile] = useState(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('idle');
@@ -17,19 +18,34 @@ const VideoConverter = () => {
 
   useEffect(() => {
     const loadFFmpeg = async () => {
+      if (isFFmpegLoaded || isFFmpegLoading) return;
+      
       try {
-        if (!ffmpeg.isLoaded()) {
-          await ffmpeg.load();
-          setIsFFmpegLoaded(true);
-          console.log('FFmpeg loaded successfully');
+        setIsFFmpegLoading(true);
+        console.log('Creating FFmpeg instance...');
+        
+        // Create FFmpeg instance only when needed
+        if (!ffmpeg) {
+          ffmpeg = createFFmpeg({
+            log: true,
+            corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js',
+          });
         }
+        
+        console.log('FFmpeg instance created, loading...');
+        await ffmpeg.load();
+        console.log('FFmpeg loaded successfully');
+        setIsFFmpegLoaded(true);
+        setIsFFmpegLoading(false);
       } catch (error) {
         console.error('Failed to load FFmpeg:', error);
+        setLoadingError(`Failed to load FFmpeg: ${error.message || 'Unknown error'}`);
+        setIsFFmpegLoading(false);
       }
     };
 
     loadFFmpeg();
-  }, []);
+  }, [isFFmpegLoaded, isFFmpegLoading]);
 
   // Set up event listeners for drag and drop
   useEffect(() => {
@@ -38,23 +54,23 @@ const VideoConverter = () => {
     const handleDragOver = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      dropzone.classList.add('active');
+      dropzone?.classList.add('active');
     };
     
     const handleDragLeave = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      dropzone.classList.remove('active');
+      dropzone?.classList.remove('active');
     };
     
     const handleDrop = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      dropzone.classList.remove('active');
+      dropzone?.classList.remove('active');
       
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
-        if (file.name.endsWith('.mkv')) {
+        if (file.name.toLowerCase().endsWith('.mkv')) {
           setInputFile(file);
         } else {
           alert('Please select an MKV file.');
@@ -77,15 +93,15 @@ const VideoConverter = () => {
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
-    if (file && file.name.endsWith('.mkv')) {
+    if (file && file.name.toLowerCase().endsWith('.mkv')) {
       setInputFile(file);
-    } else {
+    } else if (file) {
       alert('Please select an MKV file.');
     }
   };
 
   const convertToMP4 = async () => {
-    if (!inputFile || !isFFmpegLoaded) return;
+    if (!inputFile || !isFFmpegLoaded || !ffmpeg) return;
 
     try {
       setStatus('processing');
@@ -93,14 +109,14 @@ const VideoConverter = () => {
       
       // Register progress handler
       ffmpeg.setProgress(({ ratio }) => {
-        setProgress(ratio * 100);
+        setProgress(Math.max(0, Math.min(100, ratio * 100)));
       });
 
       // Write the input file to memory
       ffmpeg.FS('writeFile', inputFile.name, await fetchFile(inputFile));
 
       // Get the output filename (replace .mkv with .mp4)
-      const outputFilename = inputFile.name.replace('.mkv', '.mp4');
+      const outputFilename = inputFile.name.replace(/\.mkv$/i, '.mp4');
 
       // Run the FFmpeg command
       await ffmpeg.run(
@@ -132,7 +148,7 @@ const VideoConverter = () => {
     
     const a = document.createElement('a');
     a.href = outputURL;
-    a.download = inputFile.name.replace('.mkv', '.mp4');
+    a.download = inputFile.name.replace(/\.mkv$/i, '.mp4');
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -143,9 +159,25 @@ const VideoConverter = () => {
       <h1>MKV to MP4 Converter</h1>
       <p>Convert your MKV video files to MP4 format right in your browser</p>
       
-      {!isFFmpegLoaded ? (
-        <p>Loading FFmpeg (this may take a moment)...</p>
-      ) : (
+      {loadingError && (
+        <div className="error-message">
+          <p>Error: {loadingError}</p>
+          <p>Try refreshing the page or using a different browser.</p>
+        </div>
+      )}
+      
+      {isFFmpegLoading ? (
+        <div className="loading">
+          <p>Loading FFmpeg (this may take a moment)...</p>
+          <div className="progress-bar">
+            <div className="progress" style={{ width: '50%' }}></div>
+          </div>
+        </div>
+      ) : !isFFmpegLoaded && !loadingError ? (
+        <button onClick={() => setIsFFmpegLoading(false)}>
+          Click to Load FFmpeg
+        </button>
+      ) : isFFmpegLoaded && (
         <>
           <div 
             className="dropzone" 

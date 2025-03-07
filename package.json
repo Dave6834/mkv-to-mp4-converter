@@ -1,23 +1,32 @@
 {
   "name": "mkv-to-mp4-converter",
   "version": "1.0.0",
+  "description": "A web application that converts MKV video files to MP4 format",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
   },
-  "keywords": [],
+  "keywords": [
+    "video",
+    "converter",
+    "mkv",
+    "mp4",
+    "ffmpeg"
+  ],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
-    "@ffmpeg/core": "^0.12.10",
-    "@ffmpeg/ffmpeg": "^0.12.15",
-    "next": "^15.2.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@ffmpeg/core": "0.10.0",
+    "@ffmpeg/ffmpeg": "0.10.1",
+    "next": "^12.3.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "eslint": "^9.21.0",
-    "eslint-config-next": "^15.2.1"
+    "eslint": "^8.35.0",
+    "eslint-config-next": "^12.3.4"
   }
 }

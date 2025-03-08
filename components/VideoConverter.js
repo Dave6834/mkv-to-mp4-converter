@@ -15,6 +15,8 @@ const VideoConverter = () => {
   const [status, setStatus] = useState('idle');
   const [outputURL, setOutputURL] = useState('');
   const [conversionLog, setConversionLog] = useState([]);
+  const [formatInfo, setFormatInfo] = useState(null);
+  const [isUnsupportedFormat, setIsUnsupportedFormat] = useState(false);
   const dropzoneRef = useRef(null);
 
   useEffect(() => {
@@ -32,6 +34,12 @@ const VideoConverter = () => {
             logger: ({ message }) => {
               console.log(message);
               setConversionLog(logs => [...logs, message]);
+              
+              // Check for AV1 or other unsupported format errors
+              if (message.includes("Decoder (codec av1) not found") ||
+                  message.includes("Decoder not found")) {
+                setIsUnsupportedFormat(true);
+              }
             },
             corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js',
           });
@@ -77,6 +85,7 @@ const VideoConverter = () => {
         const file = e.dataTransfer.files[0];
         if (file.name.toLowerCase().endsWith('.mkv')) {
           setInputFile(file);
+          analyzeFile(file);
         } else {
           alert('Please select an MKV file.');
         }
@@ -100,19 +109,52 @@ const VideoConverter = () => {
     const file = e.target.files[0];
     if (file && file.name.toLowerCase().endsWith('.mkv')) {
       setInputFile(file);
+      analyzeFile(file);
     } else if (file) {
       alert('Please select an MKV file.');
     }
   };
 
+  // Analyze file to detect format
+  const analyzeFile = async (file) => {
+    if (!isFFmpegLoaded || !ffmpeg) return;
+    
+    try {
+      setStatus('analyzing');
+      setIsUnsupportedFormat(false);
+      setConversionLog([]);
+      setConversionLog(logs => [...logs, `Analyzing file format: ${file.name}`]);
+      
+      const safeFilename = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
+      ffmpeg.FS('writeFile', safeFilename, await fetchFile(file));
+      
+      // Run ffprobe-like analysis with ffmpeg
+      await ffmpeg.run('-i', safeFilename);
+      
+      // We don't need output - we just want to see if there are errors in the log
+      
+      // Clean up
+      ffmpeg.FS('unlink', safeFilename);
+      
+      setStatus('idle');
+    } catch (error) {
+      // FFmpeg will exit with error when using -i for inspection, this is normal
+      // The logger function above will catch any format issues
+      console.log("Analysis complete", error);
+      setStatus('idle');
+    }
+  };
+
   const convertToMP4 = async () => {
     if (!inputFile || !isFFmpegLoaded || !ffmpeg) return;
+    
+    // Reset states
+    setIsUnsupportedFormat(false);
+    setConversionLog([]);
+    setStatus('processing');
+    setProgress(0);
 
     try {
-      setStatus('processing');
-      setProgress(0);
-      setConversionLog([]);
-      
       // Register progress handler
       ffmpeg.setProgress(({ ratio }) => {
         setProgress(Math.max(0, Math.min(100, ratio * 100)));
@@ -142,6 +184,11 @@ const VideoConverter = () => {
         safeOutFilename
       );
 
+      // Check for unsupported format errors
+      if (isUnsupportedFormat) {
+        throw new Error('This file contains AV1 video which is not supported by FFmpeg.wasm. Try using a different file format or codec.');
+      }
+
       // Verify the file exists in the virtual filesystem
       setConversionLog(logs => [...logs, 'Checking if output file exists...']);
       const fileList = ffmpeg.FS('readdir', '/');
@@ -157,7 +204,7 @@ const VideoConverter = () => {
       
       console.log('Output file size:', data.length);
       if (data.length === 0) {
-        throw new Error('Conversion produced an empty file');
+        throw new Error('Conversion produced an empty file. The input video codec may be unsupported.');
       }
       
       // Create a URL
@@ -215,6 +262,15 @@ const VideoConverter = () => {
         </button>
       ) : isFFmpegLoaded && (
         <>
+          <div className="format-notice">
+            <p><strong>Note:</strong> This converter supports most video codecs but has some limitations:</p>
+            <ul>
+              <li>AV1 video codec is <strong>not supported</strong> by the browser-based FFmpeg</li>
+              <li>H.264, H.265, VP8, VP9 are supported</li>
+              <li>Files larger than 1GB may cause browser memory issues</li>
+            </ul>
+          </div>
+        
           <div 
             className="dropzone" 
             ref={dropzoneRef}
@@ -238,6 +294,21 @@ const VideoConverter = () => {
             <div className="file-info">
               <p>Filename: {inputFile.name}</p>
               <p>Size: {(inputFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+              {isUnsupportedFormat && (
+                <div className="warning">
+                  <p><strong>Warning:</strong> This file appears to use the AV1 video codec which is not supported by the browser version of FFmpeg. Conversion will not work with this file.</p>
+                  <p>Please try a different MKV file that uses H.264, H.265, VP8 or VP9 codec.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {status === 'analyzing' && (
+            <div className="progress-container">
+              <p>Analyzing file format...</p>
+              <div className="progress-bar">
+                <div className="progress" style={{ width: '50%' }}></div>
+              </div>
             </div>
           )}
 
@@ -259,13 +330,18 @@ const VideoConverter = () => {
 
           {status === 'error' && (
             <div className="error-message">
-              <p>An error occurred during conversion. Please try again with a smaller file or check browser console for details.</p>
+              <p>An error occurred during conversion.</p>
+              {isUnsupportedFormat ? (
+                <p>This file uses the AV1 codec which is not supported by the browser-based FFmpeg. Please try a different file.</p>
+              ) : (
+                <p>Please try again with a smaller file or different format.</p>
+              )}
             </div>
           )}
 
           <button 
             onClick={convertToMP4} 
-            disabled={!inputFile || status === 'processing'}
+            disabled={!inputFile || status === 'processing' || status === 'analyzing' || isUnsupportedFormat}
           >
             {status === 'processing' ? 'Converting...' : 'Convert to MP4'}
           </button>

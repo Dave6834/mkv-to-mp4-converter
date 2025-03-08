@@ -119,6 +119,8 @@ button:disabled {
   margin-top: 2rem;
 }
 
+/* Add these styles to your globals.css file */
+
 .log-container {
   margin-top: 2rem;
   padding: 1rem;
@@ -142,4 +144,26 @@ button:disabled {
   margin-bottom: 0.25rem;
   line-height: 1.4;
   word-break: break-all;
+}
+
+.format-notice {
+  background-color: #e9f5ff;
+  border-left: 4px solid #0d6efd;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  border-radius: 0 4px 4px 0;
+}
+
+.format-notice ul {
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+  padding-left: 1.5rem;
+}
+
+.warning {
+  background-color: #fff3cd;
+  border-left: 4px solid #ffc107;
+  padding: 1rem;
+  margin-top: 1rem;
+  border-radius: 0 4px 4px 0;
 }

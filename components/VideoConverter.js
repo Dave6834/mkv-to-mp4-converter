@@ -14,6 +14,7 @@ const VideoConverter = () => {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('idle');
   const [outputURL, setOutputURL] = useState('');
+  const [conversionLog, setConversionLog] = useState([]);
   const dropzoneRef = useRef(null);
 
   useEffect(() => {
@@ -28,6 +29,10 @@ const VideoConverter = () => {
         if (!ffmpeg) {
           ffmpeg = createFFmpeg({
             log: true,
+            logger: ({ message }) => {
+              console.log(message);
+              setConversionLog(logs => [...logs, message]);
+            },
             corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js',
           });
         }
@@ -106,39 +111,70 @@ const VideoConverter = () => {
     try {
       setStatus('processing');
       setProgress(0);
+      setConversionLog([]);
       
       // Register progress handler
       ffmpeg.setProgress(({ ratio }) => {
         setProgress(Math.max(0, Math.min(100, ratio * 100)));
       });
 
+      // Create a safe filename without spaces or special characters
+      const safeInFilename = inputFile.name.replace(/[^a-zA-Z0-9.]/g, '_');
+      const safeOutFilename = safeInFilename.replace(/\.mkv$/i, '.mp4');
+      
+      console.log(`Converting ${safeInFilename} to ${safeOutFilename}`);
+      
       // Write the input file to memory
-      ffmpeg.FS('writeFile', inputFile.name, await fetchFile(inputFile));
-
-      // Get the output filename (replace .mkv with .mp4)
-      const outputFilename = inputFile.name.replace(/\.mkv$/i, '.mp4');
-
-      // Run the FFmpeg command
+      setConversionLog(logs => [...logs, `Writing file to memory: ${safeInFilename}`]);
+      ffmpeg.FS('writeFile', safeInFilename, await fetchFile(inputFile));
+      
+      // Run the FFmpeg command with verbose logging
+      setConversionLog(logs => [...logs, 'Starting conversion process...']);
       await ffmpeg.run(
-        '-i', inputFile.name,
+        '-i', safeInFilename,
         '-c:v', 'libx264',
+        '-preset', 'fast',  // Use 'fast' preset for better performance
+        '-crf', '22',       // Reasonable quality setting
         '-c:a', 'aac',
-        '-strict', 'experimental',
-        outputFilename
+        '-b:a', '128k',     // Specify audio bitrate
+        '-movflags', '+faststart',  // Optimize for web playback
+        '-y',               // Overwrite output files without asking
+        safeOutFilename
       );
 
+      // Verify the file exists in the virtual filesystem
+      setConversionLog(logs => [...logs, 'Checking if output file exists...']);
+      const fileList = ffmpeg.FS('readdir', '/');
+      console.log('Files in virtual filesystem:', fileList);
+      
+      if (!fileList.includes(safeOutFilename)) {
+        throw new Error(`Output file ${safeOutFilename} not found in virtual filesystem`);
+      }
+
       // Read the result
-      const data = ffmpeg.FS('readFile', outputFilename);
+      setConversionLog(logs => [...logs, 'Reading output file...']);
+      const data = ffmpeg.FS('readFile', safeOutFilename);
+      
+      console.log('Output file size:', data.length);
+      if (data.length === 0) {
+        throw new Error('Conversion produced an empty file');
+      }
       
       // Create a URL
+      setConversionLog(logs => [...logs, 'Creating download URL...']);
       const url = URL.createObjectURL(
         new Blob([data.buffer], { type: 'video/mp4' })
       );
       
       setOutputURL(url);
       setStatus('complete');
+      
+      // Clean up virtual filesystem to free memory
+      ffmpeg.FS('unlink', safeInFilename);
+      ffmpeg.FS('unlink', safeOutFilename);
     } catch (error) {
       console.error('Error during conversion:', error);
+      setConversionLog(logs => [...logs, `ERROR: ${error.message}`]);
       setStatus('error');
     }
   };
@@ -174,7 +210,7 @@ const VideoConverter = () => {
           </div>
         </div>
       ) : !isFFmpegLoaded && !loadingError ? (
-        <button onClick={() => setIsFFmpegLoading(false)}>
+        <button onClick={() => setIsFFmpegLoading(true)}>
           Click to Load FFmpeg
         </button>
       ) : isFFmpegLoaded && (
@@ -222,7 +258,9 @@ const VideoConverter = () => {
           )}
 
           {status === 'error' && (
-            <p className="error">An error occurred during conversion. Please try again.</p>
+            <div className="error-message">
+              <p>An error occurred during conversion. Please try again with a smaller file or check browser console for details.</p>
+            </div>
           )}
 
           <button 
@@ -231,6 +269,19 @@ const VideoConverter = () => {
           >
             {status === 'processing' ? 'Converting...' : 'Convert to MP4'}
           </button>
+          
+          {conversionLog.length > 0 && (
+            <div className="log-container">
+              <h3>Conversion Log</h3>
+              <div className="log-messages">
+                {conversionLog.map((log, index) => (
+                  <div key={index} className="log-entry">
+                    {log}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

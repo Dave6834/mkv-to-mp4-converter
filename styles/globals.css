@@ -118,3 +118,28 @@ button:disabled {
   border-top: 1px solid #eaeaea;
   margin-top: 2rem;
 }
+
+.log-container {
+  margin-top: 2rem;
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+}
+
+.log-messages {
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 0.85rem;
+  background-color: #212529;
+  color: #f8f9fa;
+  padding: 0.75rem;
+  border-radius: 4px;
+}
+
+.log-entry {
+  margin-bottom: 0.25rem;
+  line-height: 1.4;
+  word-break: break-all;
+}

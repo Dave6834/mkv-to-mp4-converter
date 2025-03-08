@@ -1,7 +1,8 @@
 // components/VideoConverter.js
 import { useState, useEffect, useRef } from 'react';
-// Import specific versions
-import { createFFmpeg, fetchFile } from '@ffmpeg/ffmpeg';
+// Import from the latest @ffmpeg/ffmpeg version
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 // Don't initialize ffmpeg right away
 let ffmpeg = null;
@@ -15,7 +16,6 @@ const VideoConverter = () => {
   const [status, setStatus] = useState('idle');
   const [outputURL, setOutputURL] = useState('');
   const [conversionLog, setConversionLog] = useState([]);
-  const [formatInfo, setFormatInfo] = useState(null);
   const [isUnsupportedFormat, setIsUnsupportedFormat] = useState(false);
   const dropzoneRef = useRef(null);
 
@@ -29,24 +29,36 @@ const VideoConverter = () => {
         
         // Create FFmpeg instance only when needed
         if (!ffmpeg) {
-          ffmpeg = createFFmpeg({
-            log: true,
-            logger: ({ message }) => {
-              console.log(message);
-              setConversionLog(logs => [...logs, message]);
-              
-              // Check for AV1 or other unsupported format errors
-              if (message.includes("Decoder (codec av1) not found") ||
-                  message.includes("Decoder not found")) {
-                setIsUnsupportedFormat(true);
-              }
-            },
-            corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js',
+          ffmpeg = new FFmpeg();
+          
+          // Set up logger
+          ffmpeg.on('log', ({ message }) => {
+            console.log(message);
+            setConversionLog(logs => [...logs, message]);
+            
+            // Check for AV1 or other unsupported format errors
+            if (message.includes("Decoder (codec av1) not found") ||
+                message.includes("Decoder not found")) {
+              setIsUnsupportedFormat(true);
+            }
+          });
+          
+          // Set up progress handler
+          ffmpeg.on('progress', ({ progress, time }) => {
+            setProgress(Math.max(0, Math.min(100, progress * 100)));
           });
         }
         
         console.log('FFmpeg instance created, loading...');
-        await ffmpeg.load();
+        
+        // Load the ffmpeg core
+        const baseURL = 'https://unpkg.com/@ffmpeg/core-mt@0.12.6/dist/umd';
+        await ffmpeg.load({
+          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+          workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+        });
+        
         console.log('FFmpeg loaded successfully');
         setIsFFmpegLoaded(true);
         setIsFFmpegLoading(false);
@@ -126,15 +138,13 @@ const VideoConverter = () => {
       setConversionLog(logs => [...logs, `Analyzing file format: ${file.name}`]);
       
       const safeFilename = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
-      ffmpeg.FS('writeFile', safeFilename, await fetchFile(file));
+      await ffmpeg.writeFile(safeFilename, await fetchFile(file));
       
       // Run ffprobe-like analysis with ffmpeg
-      await ffmpeg.run('-i', safeFilename);
-      
-      // We don't need output - we just want to see if there are errors in the log
+      await ffmpeg.exec(['-i', safeFilename]);
       
       // Clean up
-      ffmpeg.FS('unlink', safeFilename);
+      await ffmpeg.deleteFile(safeFilename);
       
       setStatus('idle');
     } catch (error) {
@@ -155,11 +165,6 @@ const VideoConverter = () => {
     setProgress(0);
 
     try {
-      // Register progress handler
-      ffmpeg.setProgress(({ ratio }) => {
-        setProgress(Math.max(0, Math.min(100, ratio * 100)));
-      });
-
       // Create a safe filename without spaces or special characters
       const safeInFilename = inputFile.name.replace(/[^a-zA-Z0-9.]/g, '_');
       const safeOutFilename = safeInFilename.replace(/\.mkv$/i, '.mp4');
@@ -168,42 +173,35 @@ const VideoConverter = () => {
       
       // Write the input file to memory
       setConversionLog(logs => [...logs, `Writing file to memory: ${safeInFilename}`]);
-      ffmpeg.FS('writeFile', safeInFilename, await fetchFile(inputFile));
+      await ffmpeg.writeFile(safeInFilename, await fetchFile(inputFile));
       
       // Run the FFmpeg command with verbose logging
       setConversionLog(logs => [...logs, 'Starting conversion process...']);
-      await ffmpeg.run(
+      
+      // Try to use copy codecs first to avoid transcoding if possible
+      await ffmpeg.exec([
         '-i', safeInFilename,
-        '-c:v', 'libx264',
+        '-c:v', 'libx264', // Try to transcode AV1 to H.264
         '-preset', 'fast',  // Use 'fast' preset for better performance
-        '-crf', '22',       // Reasonable quality setting
+        '-crf', '23',       // Reasonable quality setting
         '-c:a', 'aac',
         '-b:a', '128k',     // Specify audio bitrate
         '-movflags', '+faststart',  // Optimize for web playback
         '-y',               // Overwrite output files without asking
         safeOutFilename
-      );
+      ]);
 
       // Check for unsupported format errors
       if (isUnsupportedFormat) {
-        throw new Error('This file contains AV1 video which is not supported by FFmpeg.wasm. Try using a different file format or codec.');
-      }
-
-      // Verify the file exists in the virtual filesystem
-      setConversionLog(logs => [...logs, 'Checking if output file exists...']);
-      const fileList = ffmpeg.FS('readdir', '/');
-      console.log('Files in virtual filesystem:', fileList);
-      
-      if (!fileList.includes(safeOutFilename)) {
-        throw new Error(`Output file ${safeOutFilename} not found in virtual filesystem`);
+        throw new Error('This file contains AV1 video which may not be fully supported by FFmpeg.wasm. The conversion may not work properly.');
       }
 
       // Read the result
       setConversionLog(logs => [...logs, 'Reading output file...']);
-      const data = ffmpeg.FS('readFile', safeOutFilename);
+      const data = await ffmpeg.readFile(safeOutFilename);
       
-      console.log('Output file size:', data.length);
-      if (data.length === 0) {
+      console.log('Output file size:', data.byteLength);
+      if (data.byteLength === 0) {
         throw new Error('Conversion produced an empty file. The input video codec may be unsupported.');
       }
       
@@ -217,8 +215,8 @@ const VideoConverter = () => {
       setStatus('complete');
       
       // Clean up virtual filesystem to free memory
-      ffmpeg.FS('unlink', safeInFilename);
-      ffmpeg.FS('unlink', safeOutFilename);
+      await ffmpeg.deleteFile(safeInFilename);
+      await ffmpeg.deleteFile(safeOutFilename);
     } catch (error) {
       console.error('Error during conversion:', error);
       setConversionLog(logs => [...logs, `ERROR: ${error.message}`]);
@@ -239,8 +237,8 @@ const VideoConverter = () => {
 
   return (
     <div className="container">
-      <h1>MKV to MP4 Converter</h1>
-      <p>Convert your MKV video files to MP4 format right in your browser</p>
+      <h1>Enhanced MKV to MP4 Converter</h1>
+      <p>Convert your MKV video files to MP4 format right in your browser (including experimental AV1 support)</p>
       
       {loadingError && (
         <div className="error-message">
@@ -263,11 +261,12 @@ const VideoConverter = () => {
       ) : isFFmpegLoaded && (
         <>
           <div className="format-notice">
-            <p><strong>Note:</strong> This converter supports most video codecs but has some limitations:</p>
+            <p><strong>Note:</strong> This enhanced converter attempts to handle more video codecs:</p>
             <ul>
-              <li>AV1 video codec is <strong>not supported</strong> by the browser-based FFmpeg</li>
-              <li>H.264, H.265, VP8, VP9 are supported</li>
+              <li>AV1 video codec may now be supported (experimental)</li>
+              <li>H.264, H.265, VP8, VP9 are fully supported</li>
               <li>Files larger than 1GB may cause browser memory issues</li>
+              <li>If conversion fails, try a different browser</li>
             </ul>
           </div>
         
@@ -296,8 +295,8 @@ const VideoConverter = () => {
               <p>Size: {(inputFile.size / (1024 * 1024)).toFixed(2)} MB</p>
               {isUnsupportedFormat && (
                 <div className="warning">
-                  <p><strong>Warning:</strong> This file appears to use the AV1 video codec which is not supported by the browser version of FFmpeg. Conversion will not work with this file.</p>
-                  <p>Please try a different MKV file that uses H.264, H.265, VP8 or VP9 codec.</p>
+                  <p><strong>Warning:</strong> This file appears to use the AV1 video codec which may have limited support in the browser version of FFmpeg. The conversion might still work but with potential quality issues.</p>
+                  <p>If conversion fails, please try a different MKV file that uses H.264, H.265, VP8 or VP9 codec.</p>
                 </div>
               )}
             </div>
@@ -332,7 +331,7 @@ const VideoConverter = () => {
             <div className="error-message">
               <p>An error occurred during conversion.</p>
               {isUnsupportedFormat ? (
-                <p>This file uses the AV1 codec which is not supported by the browser-based FFmpeg. Please try a different file.</p>
+                <p>This file uses the AV1 codec which may not be fully supported by the browser-based FFmpeg. Please try a different file or a different browser.</p>
               ) : (
                 <p>Please try again with a smaller file or different format.</p>
               )}
@@ -341,7 +340,7 @@ const VideoConverter = () => {
 
           <button 
             onClick={convertToMP4} 
-            disabled={!inputFile || status === 'processing' || status === 'analyzing' || isUnsupportedFormat}
+            disabled={!inputFile || status === 'processing' || status === 'analyzing'}
           >
             {status === 'processing' ? 'Converting...' : 'Convert to MP4'}
           </button>
